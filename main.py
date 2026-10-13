@@ -202,8 +202,42 @@ class Player:
     def turn(self, x):
         pass
 
-    def move(self, keys, walls):
-        pass
+    def move(self, walls):
+        if self.state == "TRAPPED":
+            return
+            
+        keys = pygame.key.get_pressed()
+        velocity = pygame.Vector2(0, 0)
+        
+        if keys[pygame.K_LEFT] or keys[pygame.K_a]:
+            velocity.x = -PLAYER_SPEED
+        if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
+            velocity.x = PLAYER_SPEED
+        if keys[pygame.K_UP] or keys[pygame.K_w]:
+            velocity.y = -PLAYER_SPEED
+        if keys[pygame.K_DOWN] or keys[pygame.K_s]:
+            velocity.y = PLAYER_SPEED
+
+        if velocity.length() > 0:
+            velocity = velocity.normalize() * PLAYER_SPEED
+        
+        next_pos_x = pygame.Vector2(self.position.x + velocity.x, self.position.y)
+        hit_wall_x = False
+        for wall in walls:
+            if wall.intersects(self.position, next_pos_x):
+                hit_wall_x = True
+                break
+        if not hit_wall_x:
+            self.position.x = next_pos_x.x
+
+        next_pos_y = pygame.Vector2(self.position.x, self.position.y + velocity.y)
+        hit_wall_y = False
+        for wall in walls:
+            if wall.intersects(self.position, next_pos_y):
+                hit_wall_y = True
+                break
+        if not hit_wall_y:
+            self.position.y = next_pos_y.y
 
     def draw(self, screen):
         if self.state == "ESCAPED":
@@ -223,6 +257,7 @@ class Enemy:
         self.radius = ENEMY_SIZE / 2
         self.state = "PATROL"
         self.wander_timer = 0
+        self.wander_interval = 0
 
         folder = os.path.dirname(os.path.abspath(__file__))
         happy = pygame.image.load(os.path.join(folder, "verity happy.png")).convert_alpha()
@@ -230,26 +265,102 @@ class Enemy:
         self.happy_image = pygame.transform.smoothscale(happy, (ENEMY_SIZE, ENEMY_SIZE))
         self.angry_image = pygame.transform.smoothscale(angry, (ENEMY_SIZE, ENEMY_SIZE))
         self.image = self.happy_image
+        self.wander()
 
     def forward_vector(self):
-        return pygame.Vector2(1, 0)
-
+            
+        forward_direction = pygame.math.Vector2(1, 0).rotate(self.angle)
+        forward_vector = forward_direction * 10
+        target_point = self.position + forward_vector
+        return target_point
+    
     def can_see(self, player, walls):
-        return False
+        for wall in walls:
+            if wall.intersects(self.position, player.position):
+                return False
+                
+        return True
 
     def wander(self):
+        if random.random() < 0.2:
+            self.velocity = pygame.math.Vector2(0, 0)
+        else:
+            base_vector = pygame.math.Vector2(ENEMY_SPEED, 0)
+            random_angle = random.uniform(0, 360)
+            self.velocity = base_vector.rotate(random_angle)
+        self.wander_timer = random.randint(40, 150)
+        self.wander_interval = random.randint(40, 150)
         pass
 
     def chase(self, player):
-        pass
+        direction = player.position - self.position
+        
+        if direction.length() > 0:
+            self.velocity = direction.normalize() * ENEMY_SPEED
 
-    def move(self, walls):
-        pass
+    def move(self, player, walls):
+        if self.can_see(player, walls):
+            self.state = "CHASE"
+            self.image = self.angry_image
+            self.chase(player)
+        else:
+            self.state = "PATROL"
+            self.image = self.happy_image
+            
+            self.wander_timer += 1
+            if self.wander_timer >= self.wander_interval:
+                self.wander()
+
+        if self.velocity.length() > 0:
+            self.angle = pygame.math.Vector2(1, 0).angle_to(self.velocity)
+
+        next_position = self.position + self.velocity
+        
+        collision = False
+        for wall in walls:
+            if wall.intersects(self.position, next_position):
+                collision = True
+                break
+                
+        if collision:
+            self.wander() 
+        else:
+            self.position = next_position
+
+
 
     def draw(self, screen):
-        rect = self.image.get_rect(center=self.position)
-        screen.blit(self.image, rect)
+        # Pygame rotates counter-clockwise, so we invert self.angle
+        rotated_image = pygame.transform.rotate(self.image, -self.angle)
+        rect = rotated_image.get_rect(center=self.position)
+        
+        screen.blit(rotated_image, rect)
+        
+        # Draw the forward sight line
+        pygame.draw.line(screen, (0, 0, 0), self.position, self.forward_vector(), 2)
 
+class Wall:
+    def __init__(self, start_pos, end_pos, color=(100, 100, 100), thickness=3):
+        # Convert inputs to Vector2 to ensure math works perfectly
+        self.start = pygame.Vector2(start_pos)
+        self.end = pygame.Vector2(end_pos)
+        self.color = color
+        self.thickness = thickness
+
+    def intersects(self, line_start, line_end):
+        """Returns True if the line segment (line_start -> line_end) crosses this wall."""
+        # Standard line segment intersection algorithm (CCW / Orientation test)
+        def ccw(A, B, C):
+            return (C.y - A.y) * (B.x - A.x) > (B.y - A.y) * (C.x - A.x)
+        
+        A, B = self.start, self.end
+        C, D = pygame.Vector2(line_start), pygame.Vector2(line_end)
+        
+        return ccw(A, C, D) != ccw(B, C, D) and ccw(A, B, C) != ccw(A, B, D)
+
+    def draw(self, screen):
+        # Draw the wall as a line on the screen
+        pygame.draw.line(screen, self.color, self.start, self.end, self.thickness)
 
 def build_walls():
     walls = []
@@ -290,6 +401,7 @@ def build_walls():
 
     return walls
 
+game_walls = build_walls() 
 
 def is_dark(position):
     return False
@@ -321,7 +433,8 @@ pygame.display.set_caption("Flee the Facility 2D")
 clock = pygame.time.Clock()
 font = pygame.font.Font(None, 24)
 
-walls = build_walls()
+
+
 computers = [Computer(spot) for spot in COMPUTER_SPOTS]
 tubes = [Tube(spot) for spot in TUBE_SPOTS]
 exits = [Exit(line[0], line[1]) for line in EXIT_LINES]
@@ -334,7 +447,6 @@ enemy = Enemy(ENEMY_START)
 
 game_state = "PLAYING"
 
-
 running = True
 while running:
     for event in pygame.event.get():
@@ -343,8 +455,34 @@ while running:
 
     keys = pygame.key.get_pressed()
 
+    for player in players:
+        player.move(game_walls)
+    enemy.move(player, game_walls)
+
+    for p in players:
+        if p.state == "FREE":
+            distance = enemy.position.distance_to(p.position)
+        # If enemy collides with a player
+        if distance < (enemy.radius + p.radius):
+            # Gather empty tubes
+            available_tubes = [t for t in tubes if t.trapped_player is None]
+            if available_tubes:
+                # Find closest empty tube capsule
+                available_tubes.sort(key=lambda t: t.position.distance_to(p.position))
+                target_tube = available_tubes[0]
+                # Lock the player state and teleport them inside
+                p.state = "TRAPPED"
+                p.position = pygame.Vector2(target_tube.position)
+                target_tube.trapped_player = p
+                enemy.state = "PATROL"
+                enemy.wander()
+                break
+
+    for wall in game_walls:
+        wall.draw(screen)
+
     draw_floor(screen)
-    for wall in walls:
+    for wall in game_walls:
         wall.draw(screen)
     for exit_door in exits:
         exit_door.draw(screen)
@@ -355,6 +493,7 @@ while running:
     for player in players:
         player.draw(screen)
 
+    player.draw(screen)
     enemy.draw(screen)
 
     solved = 0
